@@ -47,8 +47,9 @@ function scheduleReconnect(delay = config.utils["auto-reconnect-delay"] || 5000)
 function createBot() {
   cleanup();
 
-  // Gera nome aleatório para evitar duplicate_login
-  const BOT_USERNAME = `${config["bot-account"].username}_${Math.floor(Math.random() * 1000)}`;
+  // Gera nome aleatório estilo Nimercraft_123
+  const randomNumber = Math.floor(Math.random() * 900) + 100; // 100–999
+  const BOT_USERNAME = `Nimercraft_${randomNumber}`;
 
   currentBot = mineflayer.createBot({
     username: BOT_USERNAME,
@@ -105,7 +106,7 @@ function createBot() {
               }
             } catch {}
           }
-        }, 7000); // menos frequente para não sobrecarregar
+        }, 7000);
         activeIntervals.push(afkInterval);
       }
     }
