@@ -7,7 +7,7 @@ function createBot() {
 
   const bot = mineflayer.createBot({
     host: "nimerserverofc.progamer.me", // IP/domínio
-    port: 48642,                        // Porta correta
+    port: 18242,                        // Porta correta
     username: BOT_USERNAME,
     version: "1.12.2",                  // Confirma a versão do teu servidor
     connectTimeout: 30000               // Timeout aumentado
