@@ -9,7 +9,7 @@ const config = require("./settings.json");
 
 const app = express();
 
-// Servidor web para manter o bot acordado
+// Servidor web para manter o bot "acordado"
 app.get("/", (req, res) => res.send("Bot AFK online ✅"));
 app.listen(process.env.PORT || 5000, "0.0.0.0", () =>
   console.log("Servidor web rodando na porta", process.env.PORT || 5000)
@@ -19,149 +19,129 @@ let currentBot = null;
 let reconnectTimeout = null;
 let activeIntervals = [];
 
+// Função de cleanup
 function cleanup() {
-  activeIntervals.forEach(interval => clearInterval(interval));
+  activeIntervals.forEach((i) => clearInterval(i));
   activeIntervals = [];
-
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout);
-    reconnectTimeout = null;
-  }
+  if (reconnectTimeout) clearTimeout(reconnectTimeout);
+  reconnectTimeout = null;
 
   if (currentBot) {
     currentBot.removeAllListeners();
-    try { currentBot.quit(); } catch (err) {}
+    try { currentBot.quit(); } catch {}
     currentBot = null;
   }
 }
 
-function createTimeoutPromise(promise, timeoutMs = 10000) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Timeout')), timeoutMs)
-    )
-  ]);
-}
-
+// Reconexão segura
 function scheduleReconnect(delay = config.utils["auto-reconnect-delay"] || 5000) {
   if (reconnectTimeout) return;
-  console.log(`[AfkBot] Reconectando em ${delay/1000}s...`);
+  console.log(`[AfkBot] Reconectando em ${delay / 1000}s...`);
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null;
     createBot();
   }, delay);
 }
 
+// Função principal do bot
 function createBot() {
   cleanup();
 
+  // Gera nome aleatório para evitar duplicate_login
+  const BOT_USERNAME = `${config["bot-account"].username}_${Math.floor(Math.random() * 1000)}`;
+
+  currentBot = mineflayer.createBot({
+    username: BOT_USERNAME,
+    password: config["bot-account"].password,
+    auth: config["bot-account"].type,
+    host: config.server.ip,
+    port: config.server.port,
+    version: config.server.version,
+    connectTimeout: 60000, // aumenta timeout para conexões lentas
+  });
+
+  const bot = currentBot;
+  bot.loadPlugin(pathfinder);
+
+  let mcData, defaultMove;
   try {
-    currentBot = mineflayer.createBot({
-      username: config["bot-account"].username,
-      password: config["bot-account"].password,
-      auth: config["bot-account"].type,
-      host: config.server.ip,
-      port: config.server.port,
-      version: config.server.version,
-    });
-
-    const bot = currentBot;
-    bot.loadPlugin(pathfinder);
-
-    let mcData, defaultMove;
-    try {
-      mcData = require("minecraft-data")(bot.version);
-      defaultMove = new Movements(bot, mcData);
-    } catch (err) {
-      console.error("[ERROR] Falha ao carregar minecraft-data:", err.message);
-    }
-
-    // bot.settings.colorsEnabled = false; // removido para compatibilidade
-
-    async function authenticate() {
-      if (!config.utils["auto-auth"].enabled) return;
-      const password = config.utils["auto-auth"].password;
-      let authenticated = false, attempts = 0, maxAttempts = 3;
-
-      while (!authenticated && attempts < maxAttempts) {
-        try {
-          attempts++;
-          console.log(`[Auth] Tentativa ${attempts}/${maxAttempts}`);
-
-          await createTimeoutPromise(new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout no registro')), 5000);
-            bot.chat(`/register ${password} ${password}`);
-            bot.once("chat", () => { clearTimeout(timeout); resolve(); });
-          }));
-
-          await createTimeoutPromise(new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout no login')), 5000);
-            bot.chat(`/login ${password}`);
-            bot.once("chat", () => { clearTimeout(timeout); resolve(); });
-          }));
-
-          authenticated = true;
-          console.log("[Auth] Autenticação concluída!");
-        } catch (err) {
-          console.error(`[Auth Error] Tentativa ${attempts} falhou:`, err.message);
-          if (attempts < maxAttempts) await new Promise(res => setTimeout(res, 3000));
-        }
-      }
-    }
-
-    bot.once("spawn", async () => {
-      console.log(`[AfkBot] Bot entrou no servidor como ${bot.username}`);
-      try { await authenticate(); } catch (err) { console.error("[Auth] Erro:", err.message); }
-
-      if (config.utils["chat-messages"].enabled) {
-        const messages = config.utils["chat-messages"].messages;
-        if (config.utils["chat-messages"].repeat && messages.length > 0) {
-          let i = 0;
-          const chatInterval = setInterval(() => {
-            if (bot && !bot.ended) { bot.chat(messages[i]); i = (i+1) % messages.length; }
-          }, config.utils["chat-messages"]["repeat-delay"]*1000);
-          activeIntervals.push(chatInterval);
-        } else messages.forEach(msg => { if (bot && !bot.ended) bot.chat(msg); });
-      }
-
-      if (config.utils["anti-afk"].enabled) {
-        if (config.utils["anti-afk"].jump) bot.setControlState("jump", true);
-        if (config.utils["anti-afk"].sneak) bot.setControlState("sneak", true);
-
-        if (config.utils["anti-afk"].move || config.utils["anti-afk"].rotate) {
-          const afkInterval = setInterval(() => {
-            if (bot && !bot.ended) {
-              if (config.utils["anti-afk"].move) {
-                ["forward","back","left","right"].forEach(dir => bot.setControlState(dir, Math.random()>0.5));
-              }
-              if (config.utils["anti-afk"].rotate) bot.look(Math.random()*360, Math.random()*90-45);
-            }
-          }, 5000);
-          activeIntervals.push(afkInterval);
-        }
-      }
-
-      if (config.position.enabled && defaultMove) {
-        try { bot.pathfinder.setMovements(defaultMove); bot.pathfinder.setGoal(new GoalBlock(config.position.x, config.position.y, config.position.z)); }
-        catch(err) { console.error("[ERROR] Falha ao definir posição:", err.message); }
-      }
-    });
-
-    bot.on("death", () => console.log("[AfkBot] Bot morreu e respawnou"));
-    bot.on("goal_reached", () => console.log("[AfkBot] Objetivo alcançado"));
-    bot.on("end", reason => { console.log(`[AfkBot] Conexão encerrada: ${reason || 'Desconhecido'}`); if(config.utils["auto-reconnect"]) scheduleReconnect(); });
-    bot.on("kicked", reason => { console.log(`[AfkBot] Bot foi kickado: ${reason}`); if(config.utils["auto-reconnect"]) scheduleReconnect(); });
-    bot.on("error", err => { console.error("[ERROR]", err.message); if(err.message.includes('ECONNREFUSED')||err.message.includes('ETIMEDOUT')) scheduleReconnect(10000); });
-
+    mcData = require("minecraft-data")(bot.version);
+    defaultMove = new Movements(bot, mcData);
   } catch (err) {
-    console.error("[FATAL ERROR] Falha ao criar bot:", err.message);
-    if(config.utils["auto-reconnect"]) scheduleReconnect(15000);
+    console.error("[ERROR] Falha ao carregar minecraft-data:", err.message);
   }
+
+  bot.once("spawn", async () => {
+    console.log(`[AfkBot] Bot entrou no servidor como ${bot.username}`);
+
+    // Chat messages seguras
+    if (config.utils["chat-messages"].enabled && config.utils["chat-messages"].messages.length) {
+      let i = 0;
+      const chatInterval = setInterval(() => {
+        if (bot && !bot.ended) {
+          try { bot.chat(config.utils["chat-messages"].messages[i]); } catch {}
+          i = (i + 1) % config.utils["chat-messages"].messages.length;
+        }
+      }, config.utils["chat-messages"]["repeat-delay"] * 1000);
+      activeIntervals.push(chatInterval);
+    }
+
+    // Anti-AFK seguro
+    if (config.utils["anti-afk"].enabled) {
+      if (config.utils["anti-afk"].jump) bot.setControlState("jump", true);
+      if (config.utils["anti-afk"].sneak) bot.setControlState("sneak", true);
+
+      if (config.utils["anti-afk"].move || config.utils["anti-afk"].rotate) {
+        const afkInterval = setInterval(() => {
+          if (bot && !bot.ended) {
+            try {
+              if (config.utils["anti-afk"].move) {
+                ["forward", "back", "left", "right"].forEach((dir) =>
+                  bot.setControlState(dir, Math.random() > 0.5)
+                );
+              }
+              if (config.utils["anti-afk"].rotate) {
+                bot.look(Math.random() * 360, Math.random() * 90 - 45);
+              }
+            } catch {}
+          }
+        }, 7000); // menos frequente para não sobrecarregar
+        activeIntervals.push(afkInterval);
+      }
+    }
+
+    // Posicionamento
+    if (config.position.enabled && defaultMove) {
+      try {
+        bot.pathfinder.setMovements(defaultMove);
+        bot.pathfinder.setGoal(new GoalBlock(config.position.x, config.position.y, config.position.z));
+      } catch {}
+    }
+  });
+
+  // Eventos de reconexão
+  bot.on("end", () => {
+    console.log("[AfkBot] Conexão encerrada");
+    if (config.utils["auto-reconnect"]) scheduleReconnect();
+  });
+
+  bot.on("kicked", (reason) => {
+    console.log(`[AfkBot] Kickado: ${reason}`);
+    if (config.utils["auto-reconnect"]) scheduleReconnect();
+  });
+
+  bot.on("error", (err) => {
+    console.error("[AfkBot ERROR]", err.message);
+    if (config.utils["auto-reconnect"]) scheduleReconnect(10000);
+  });
+
+  bot.on("death", () => console.log("[AfkBot] Bot morreu e respawnou"));
+  bot.on("goal_reached", () => console.log("[AfkBot] Objetivo alcançado"));
 }
 
-process.on('SIGINT', () => { console.log('\n[AfkBot] Encerrando bot...'); cleanup(); process.exit(0); });
-process.on('SIGTERM', () => { console.log('\n[AfkBot] Encerrando bot...'); cleanup(); process.exit(0); });
+// Encerramento gracioso
+process.on("SIGINT", () => { cleanup(); process.exit(0); });
+process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
 // Inicia o bot
 createBot();
